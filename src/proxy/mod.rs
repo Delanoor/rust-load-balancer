@@ -1,6 +1,3 @@
-use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
-
 use bytes::Bytes;
 use http_body_util::{combinators::BoxBody, BodyExt, Empty, Full};
 use hyper::client::conn::http1::Builder;
@@ -8,37 +5,34 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::upgrade::Upgraded;
 use hyper::{Method, Request, Response, StatusCode, Uri};
-
 use hyper_util::rt::TokioIo;
-
+use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
 use tokio::net::{TcpListener, TcpStream};
+
+use crate::common::types::Backend;
+
+use tokio::sync::Notify;
 
 #[derive(Debug, Clone)]
 pub struct Server {
-    pub services: Vec<Service>,
-}
-
-#[derive(Debug, Clone)]
-pub struct Service {
-    pub name: String,
     pub listen_addr: SocketAddr,
-    pub backends: Vec<SocketAddr>,
-    pub current_backend: Arc<Mutex<usize>>,
+    pub backends: Vec<Backend>,
+    current_index: Arc<Mutex<usize>>,
 }
 
-impl Service {
-    pub fn new(name: String, listen_addr: SocketAddr, backends: Vec<SocketAddr>) -> Self {
+impl Server {
+    pub fn new(listen_addr: SocketAddr, backends: Vec<Backend>) -> Self {
         Self {
-            name,
             listen_addr,
             backends,
-            current_backend: Arc::new(Mutex::new(0)),
+            current_index: Arc::new(Mutex::new(0)),
         }
     }
 
     pub fn get_next_backend(&self) -> SocketAddr {
-        let mut index = self.current_backend.lock().unwrap();
-        let addr = self.backends[*index];
+        let mut index = self.current_index.lock().unwrap();
+        let addr = self.backends[*index].addr;
         *index = (*index + 1) % self.backends.len();
         addr
     }
@@ -46,69 +40,35 @@ impl Service {
     pub async fn run(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let listener = TcpListener::bind(&self.listen_addr).await?;
 
+        eprintln!("Listening on {}", self.listen_addr);
+
         loop {
-            let (stream, _) = listener.accept().await?;
-            let service = self.clone();
-
-            tokio::task::spawn(async move {
-                if let Err(err) = http1::Builder::new()
-                    .preserve_header_case(true)
-                    .title_case_headers(true)
-                    .serve_connection(
-                        TokioIo::new(stream),
-                        service_fn(move |req| {
-                            let backend_addr = service.get_next_backend();
-                            proxy(req, backend_addr)
-                        }),
-                    )
-                    .with_upgrades()
-                    .await
-                {
-                    eprintln!("Error serving connection: {:?}", err);
+            match listener.accept().await {
+                Ok((stream, _)) => {
+                    let service = self.clone();
+                    tokio::task::spawn(async move {
+                        if let Err(err) = http1::Builder::new()
+                            .preserve_header_case(true)
+                            .title_case_headers(true)
+                            .serve_connection(
+                                TokioIo::new(stream),
+                                service_fn(move |req| {
+                                    let backend_addr = service.get_next_backend();
+                                    proxy(req, backend_addr)
+                                }),
+                            )
+                            .with_upgrades()
+                            .await
+                        {
+                            eprintln!("Error serving connection: {:?}", err);
+                        }
+                    });
                 }
-            });
-        }
-        // while let Ok((stream, _)) = listener.accept().await {
-        //     let service = self.clone();
-
-        //     tokio::task::spawn(async move {
-        //         if let Err(err) = http1::Builder::new()
-        //             .preserve_header_case(true)
-        //             .title_case_headers(true)
-        //             .serve_connection(
-        //                 TokioIo::new(stream),
-        //                 service_fn(move |req| {
-        //                     let backend_addr = service.get_next_backend();
-        //                     proxy(req, backend_addr)
-        //                 }),
-        //             )
-        //             .with_upgrades()
-        //             .await
-        //         {
-        //             eprintln!("Error serving connection: {:?}", err);
-        //         }
-        //     });
-        // }
-        // Ok(())
-    }
-}
-
-impl Server {
-    pub fn new(services: Vec<Service>) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        Ok(Self { services })
-    }
-
-    pub async fn run(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        for service in self.services.iter() {
-            let service = service.clone();
-            tokio::spawn(async move {
-                if let Err(err) = service.run().await {
-                    eprintln!("Service {:?} failed: {:?}", service.name, err);
+                Err(err) => {
+                    eprintln!("Error accepting connection: {:?}", err);
                 }
-            });
+            }
         }
-
-        Ok(())
     }
 }
 
@@ -116,8 +76,6 @@ async fn proxy(
     req: Request<hyper::body::Incoming>,
     backend_addr: SocketAddr,
 ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
-    println!("Request: {:?}", req);
-
     if Method::CONNECT == req.method() {
         if let Some(addr) = host_addr(req.uri()) {
             tokio::task::spawn(async move {
@@ -149,7 +107,7 @@ async fn proxy(
             match hyper::upgrade::on(req).await {
                 Ok(upgraded) => {
                     if let Err(e) = tunnel(upgraded, backend_addr.to_string()).await {
-                        eprintln!("Server IO error: {}", e);
+                        eprintln!("Upgrade IO error: {}", e);
                     }
                 }
                 Err(e) => eprintln!("Upgrade error: {}", e),
@@ -163,7 +121,9 @@ async fn proxy(
             .body(empty())
             .unwrap())
     } else {
-        let stream = TcpStream::connect(backend_addr).await.unwrap();
+        let stream = TcpStream::connect(backend_addr)
+            .await
+            .expect("connection error");
         let io = TokioIo::new(stream);
 
         let (mut sender, conn) = Builder::new()
@@ -177,7 +137,10 @@ async fn proxy(
             }
         });
 
+        // Forward the request and get the response
         let resp = sender.send_request(req).await?;
+        println!("Received response from backend: {:?}", resp);
+
         Ok(resp.map(|b| b.boxed()))
     }
 }
