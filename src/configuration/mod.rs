@@ -1,7 +1,8 @@
-use crate::common::types::Backend;
-use config::{Config, ConfigError, File, FileFormat};
+use config::{Config, ConfigError, File};
 use serde::Deserialize;
 use std::{env, net::SocketAddr};
+
+use crate::proxy::backend::Backend;
 
 #[derive(Debug, Deserialize)]
 pub struct RawSettings {
@@ -37,7 +38,7 @@ impl Settings {
             .into_iter()
             .map(|backend| Backend {
                 name: backend.name,
-                addr: backend.addr.parse().expect("Invalid backend address"),
+                listen_addr: backend.addr.parse().expect("Invalid backend address"),
             })
             .collect();
 

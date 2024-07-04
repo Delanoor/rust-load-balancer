@@ -10,52 +10,57 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use tokio::net::{TcpListener, TcpStream};
 
-use crate::common::types::Backend;
+pub mod backend;
 
-use tokio::sync::Notify;
+use backend::Backend;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Server {
     pub listen_addr: SocketAddr,
-    pub backends: Vec<Backend>,
-    current_index: Arc<Mutex<usize>>,
+    pub backends: Vec<Arc<Backend>>,
+    pub current_index: Mutex<usize>,
 }
 
 impl Server {
     pub fn new(listen_addr: SocketAddr, backends: Vec<Backend>) -> Self {
-        Self {
+        let mut new_server = Server {
             listen_addr,
-            backends,
-            current_index: Arc::new(Mutex::new(0)),
+            backends: Vec::new(),
+            current_index: Mutex::new(0),
+        };
+        let mut new_backends = Vec::new();
+
+        for backend in backends.into_iter() {
+            new_backends.push(Arc::new(backend))
         }
+
+        new_server.backends = new_backends.to_owned();
+        new_server
     }
 
-    pub fn get_next_backend(&self) -> SocketAddr {
+    pub fn get_next(&self) -> SocketAddr {
         let mut index = self.current_index.lock().unwrap();
-        let addr = self.backends[*index].addr;
+        let addr = self.backends[*index].listen_addr;
         *index = (*index + 1) % self.backends.len();
         addr
     }
 
-    pub async fn run(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn run(self: Arc<Self>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let listener = TcpListener::bind(&self.listen_addr).await?;
 
-        eprintln!("Listening on {}", self.listen_addr);
+        println!("Listening on {}", self.listen_addr);
 
         loop {
             match listener.accept().await {
                 Ok((stream, _)) => {
-                    let service = self.clone();
+                    let service = Arc::clone(&self);
                     tokio::task::spawn(async move {
                         if let Err(err) = http1::Builder::new()
                             .preserve_header_case(true)
                             .title_case_headers(true)
                             .serve_connection(
                                 TokioIo::new(stream),
-                                service_fn(move |req| {
-                                    let backend_addr = service.get_next_backend();
-                                    proxy(req, backend_addr)
-                                }),
+                                service_fn(move |req| proxy(req, service.clone())),
                             )
                             .with_upgrades()
                             .await
@@ -74,8 +79,10 @@ impl Server {
 
 async fn proxy(
     req: Request<hyper::body::Incoming>,
-    backend_addr: SocketAddr,
+    server: Arc<Server>,
 ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
+    let backend_addr = server.get_next().to_string();
+
     if Method::CONNECT == req.method() {
         if let Some(addr) = host_addr(req.uri()) {
             tokio::task::spawn(async move {
@@ -106,7 +113,7 @@ async fn proxy(
         tokio::task::spawn(async move {
             match hyper::upgrade::on(req).await {
                 Ok(upgraded) => {
-                    if let Err(e) = tunnel(upgraded, backend_addr.to_string()).await {
+                    if let Err(e) = tunnel(upgraded, backend_addr).await {
                         eprintln!("Upgrade IO error: {}", e);
                     }
                 }
@@ -146,7 +153,7 @@ async fn proxy(
 }
 
 fn host_addr(uri: &Uri) -> Option<String> {
-    uri.authority().and_then(|auth| Some(auth.to_string()))
+    uri.authority().map(|auth| auth.to_string())
 }
 
 fn empty() -> BoxBody<Bytes, hyper::Error> {

@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+arc-swap = "1.7.1"
 bytes = "1.6.0"
 config = "0.14.0"
 http = "1.1.0"
