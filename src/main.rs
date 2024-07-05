@@ -9,7 +9,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     color_eyre::install().expect("Failed to install color_eyre");
     init_tracing().expect("Failed to initialize tracing");
 
-    let configs = Settings::new().expect("Failed to load configuration.");
+    let configs = Settings::new().expect("Failed to loadconfiguration .");
 
     let server = Server::new(configs.listen_addr, configs.backends);
 

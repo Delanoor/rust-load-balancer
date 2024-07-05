@@ -1,4 +1,5 @@
 use bytes::Bytes;
+use http::header::CONNECTION;
 use http_body_util::{combinators::BoxBody, BodyExt, Empty, Full};
 use hyper::client::conn::http1::Builder;
 use hyper::server::conn::http1;
@@ -8,7 +9,9 @@ use hyper::{Method, Request, Response, StatusCode, Uri};
 use hyper_util::rt::TokioIo;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
+use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
+use tracing::{debug, info};
 
 pub mod backend;
 
@@ -48,7 +51,7 @@ impl Server {
     pub async fn run(self: Arc<Self>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let listener = TcpListener::bind(&self.listen_addr).await?;
 
-        println!("Listening on {}", self.listen_addr);
+        tracing::info!("Listening on {}", self.listen_addr);
 
         loop {
             match listener.accept().await {
@@ -83,22 +86,30 @@ async fn proxy(
 ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
     let backend_addr = server.get_next().to_string();
 
+    debug!("Received req: {:?}", req);
+
+    tracing::info!("Next backend: {}", backend_addr);
+
+    let method = req.method().clone();
+    let uri = req.uri().clone();
+    let headers = req.headers().clone();
+
     if Method::CONNECT == req.method() {
         if let Some(addr) = host_addr(req.uri()) {
             tokio::task::spawn(async move {
                 match hyper::upgrade::on(req).await {
                     Ok(upgraded) => {
                         if let Err(e) = tunnel(upgraded, addr).await {
-                            eprintln!("Server IO error: {}", e);
+                            tracing::error!("Server IO error: {}", e);
                         }
                     }
-                    Err(e) => eprintln!("Upgrade error: {}", e),
+                    Err(e) => tracing::error!("Upgrade error: {}", e),
                 }
             });
 
             Ok(Response::new(empty()))
         } else {
-            eprintln!("CONNECT host is not a socket addr: {:?}", req.uri());
+            tracing::error!("CONNECT host is not a socket addr: {:?}", req.uri());
             let mut resp = Response::new(full("CONNECT must be to a socket address"));
             *resp.status_mut() = StatusCode::BAD_REQUEST;
 
@@ -114,10 +125,10 @@ async fn proxy(
             match hyper::upgrade::on(req).await {
                 Ok(upgraded) => {
                     if let Err(e) = tunnel(upgraded, backend_addr).await {
-                        eprintln!("Upgrade IO error: {}", e);
+                        tracing::error!("Upgrade IO error: {}", e);
                     }
                 }
-                Err(e) => eprintln!("Upgrade error: {}", e),
+                Err(e) => tracing::error!("Upgrade error: {}", e),
             }
         });
 
@@ -128,7 +139,7 @@ async fn proxy(
             .body(empty())
             .unwrap())
     } else {
-        let stream = TcpStream::connect(backend_addr)
+        let stream = TcpStream::connect(&backend_addr)
             .await
             .expect("connection error");
         let io = TokioIo::new(stream);
@@ -140,15 +151,28 @@ async fn proxy(
             .await?;
         tokio::task::spawn(async move {
             if let Err(err) = conn.await {
-                println!("Connection failed: {:?}", err);
+                tracing::error!("Connection failed: {:?}", err);
             }
         });
 
         // Forward the request and get the response
-        let resp = sender.send_request(req).await?;
-        println!("Received response from backend: {:?}", resp);
+        let resp = sender.send_request(req).await.map_err(|e| {
+            tracing::error!("Send request error: {:?}", e);
+            e
+        })?;
 
-        Ok(resp.map(|b| b.boxed()))
+        let mut response = resp.map(|b| b.boxed());
+
+        if headers
+            .get(CONNECTION)
+            .map(|v| v == "close")
+            .unwrap_or(false)
+        {
+            response
+                .headers_mut()
+                .insert(CONNECTION, "close".parse().unwrap());
+        }
+        Ok(response)
     }
 }
 
