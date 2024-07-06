@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  service1:
+    build:
+      context: ./service1
+    ports:
+      - "8000:8000"
+
+  service2:
+    build:
+      context: ./service2
+    ports:
+      - "8080:8080"
+
