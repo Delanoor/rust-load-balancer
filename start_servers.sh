@@ -1,62 +1,130 @@
 #!/bin/bash
 
-SERVICE1_DIR="service1"
-SERVICE2_DIR="service2"
-WEBSOCKET_DIR="websocket_server"
+# Usage function
+usage() {
+    echo "Usage: $0 <number_of_services>"
+    exit 1
+}
 
-SERVICE1_DOCKERFILE="$SERVICE1_DIR/Dockerfile"
-SERVICE2_DOCKERFILE="$SERVICE2_DIR/Dockerfile"
-WEBSOCKET_DOCKERFILE="$WEBSOCKET_DIR/Dockerfile"
+# Check if the correct number of arguments is provided
+if [ "$#" -ne 1 ]; then
+    usage
+fi
+
+NUM_SERVICES=$1
 
 DOCKER_COMPOSE_FILE="docker-compose.yml"
+TOML_FILE="development.toml"
 
-# Create directories for services
-mkdir -p $SERVICE1_DIR
-mkdir -p $SERVICE2_DIR
-mkdir -p $WEBSOCKET_DIR
+# Clean up previous directories and files
+rm -rf service_*
+rm -f $DOCKER_COMPOSE_FILE
+rm -f $TOML_FILE
 
-# for service1
-cat <<EOF >$SERVICE1_DOCKERFILE
+# Create Dockerfiles and directories for services
+for i in $(seq 1 $NUM_SERVICES); do
+    SERVICE_DIR="service_$i"
+    mkdir -p $SERVICE_DIR
+    cat <<EOF >$SERVICE_DIR/Dockerfile
 FROM python:3.8-slim
 
 WORKDIR /app
 
-RUN echo "1" > index.html
+COPY index.html .
 
 CMD ["python3", "-m", "http.server", "8000"]
 EOF
 
-# for service2
-cat <<EOF >$SERVICE2_DOCKERFILE
-FROM python:3.8-slim
 
-WORKDIR /app
-
-RUN echo "2" > index.html
-
-CMD ["python3", "-m", "http.server", "8080"]
+    cat <<EOF >$SERVICE_DIR/index.html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Service $i</title>
+    <style>
+body {
+    font-family: "Trebuchet MS", "Lucida Sans Unicode", "Lucida Grande","Lucida Sans", Arial, sans-serif;
+    text-align: center;
+    height: 100vh;
+    overflow: hidden;
+    background: #e4edfb;
+}
+.container {
+    display: flex;
+    justify-content: center;
+    height: 100%;
+    align-items: center;
+}
+.box {
+    width: 450px;
+    aspect-ratio: 1 / 1;
+    border-radius: 50px;
+    display: flex;
+    justify-content: center;
+    flex-direction: column;
+    align-items: center;
+    background: #e4edfb;
+    box-shadow: 20px 20px 60px #c2c9d5, -20px -20px 60px #ffffff;
+}
+h3 {
+    font-weight: 500;
+    font-size: 1.5rem;
+    color: #333;
+}
+.service-number {
+    font-weight: 700;
+    font-size: 4.5rem;
+}
+    </style>
+</head>
+<body>
+    <div class='container'>
+        <div class='box'>
+            <h3>Service</h3>
+            <span class="service-number">$i</span>
+        </div>
+    </div>
+</body>
+</html>
 EOF
 
-
+done
 
 # Create docker-compose.yml
 cat <<EOF >$DOCKER_COMPOSE_FILE
 version: '3.8'
 
 services:
-  service1:
-    build:
-      context: ./service1
-    ports:
-      - "8000:8000"
+EOF
 
-  service2:
+# Add services to docker-compose.yml
+for i in $(seq 1 $NUM_SERVICES); do
+    cat <<EOF >>$DOCKER_COMPOSE_FILE
+  service_$i:
     build:
-      context: ./service2
+      context: ./service_$i
     ports:
-      - "8080:8080"
+      - "$((8000 + i - 1)):8000"
+EOF
+done
+
+# Create development.toml
+cat <<EOF >$TOML_FILE
+listen_addr = "127.0.0.1:3000"
+algorithm = "round-robin"
+# algorithm = "random"
 
 EOF
 
+# Add backends to development.toml
+for i in $(seq 1 $NUM_SERVICES); do
+    cat <<EOF >>$TOML_FILE
+[[backends]]
+name = "service-$i"
+addr = "127.0.0.1:$((8000 + i - 1))"
+EOF
+done
 
 docker-compose up --build

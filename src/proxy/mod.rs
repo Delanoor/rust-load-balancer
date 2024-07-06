@@ -1,4 +1,6 @@
+use rand::Rng;
 use std::net::SocketAddr;
+
 use std::sync::{Arc, Mutex};
 use tokio::io::{copy_bidirectional, AsyncWriteExt};
 use tracing::debug;
@@ -9,35 +11,50 @@ pub mod backend;
 
 use backend::Backend;
 
+use crate::configuration::LoadBalancingAlgorithm;
+use crate::configuration::Settings;
+
 #[derive(Debug)]
 pub struct Server {
     pub listen_addr: SocketAddr,
-    pub backends: Vec<Arc<Backend>>,
+    pub backends: Vec<Backend>,
     pub current_index: Mutex<usize>,
+    pub selector: LoadBalancingAlgorithm,
 }
 
 impl Server {
-    pub fn new(listen_addr: SocketAddr, backends: Vec<Backend>) -> Arc<Self> {
-        let mut new_server = Server {
-            listen_addr,
-            backends: Vec::new(),
+    pub fn new(config: Settings) -> Arc<Self> {
+        // let rcvr = config.clone().watch_config().unwrap();
+
+        let new_server = Self {
+            listen_addr: config.listen_addr,
+            backends: config.backends,
             current_index: Mutex::new(0),
+            selector: config.algorithm,
         };
-        let mut new_backends = Vec::new();
-
-        for backend in backends.into_iter() {
-            new_backends.push(Arc::new(backend))
-        }
-
-        new_server.backends = new_backends.to_owned();
         Arc::new(new_server)
     }
+    pub fn update(&mut self, settings: Settings) {
+        self.backends = settings.backends;
 
-    pub fn get_next(&self) -> SocketAddr {
-        let mut index: std::sync::MutexGuard<usize> = self.current_index.lock().unwrap();
-        let addr = self.backends[*index].listen_addr;
-        *index = (*index + 1) % self.backends.len();
-        addr
+        self.selector = settings.algorithm;
+    }
+
+    pub async fn get_next(&self) -> SocketAddr {
+        match self.selector {
+            LoadBalancingAlgorithm::Random => {
+                let mut rng = rand::thread_rng();
+                let random_index = rng.gen_range(0..self.backends.len());
+                tracing::info!("New random number : {}", random_index);
+                self.backends[random_index].listen_addr
+            }
+            LoadBalancingAlgorithm::RoundRobin => {
+                let mut index: std::sync::MutexGuard<usize> = self.current_index.lock().unwrap();
+                let addr = self.backends[*index].listen_addr;
+                *index = (*index + 1) % self.backends.len();
+                addr
+            }
+        }
     }
 
     pub async fn run(self: Arc<Self>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -46,7 +63,7 @@ impl Server {
 
         loop {
             let (client_stream, _) = listener.accept().await?;
-            let backend_addr = self.get_next();
+            let backend_addr = self.get_next().await;
             tracing::info!("Forwarding connection to {}", backend_addr);
 
             let service: Arc<Server> = Arc::clone(&self);

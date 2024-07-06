@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Backend {
     pub name: String,
     pub listen_addr: SocketAddr,

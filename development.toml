@@ -1,10 +1,25 @@
 listen_addr = "127.0.0.1:3000"
+# algorithm = "round-robin"
+algorithm = "random"
 
 [[backends]]
-name = "rusty-next"
+name = "service-1"
 addr = "127.0.0.1:8000"
-
 [[backends]]
-name = "leptos-1"
-addr = "127.0.0.1:8080"
-
+name = "service-2"
+addr = "127.0.0.1:8001"
+[[backends]]
+name = "service-3"
+addr = "127.0.0.1:8002"
+[[backends]]
+name = "service-4"
+addr = "127.0.0.1:8003"
+[[backends]]
+name = "service-5"
+addr = "127.0.0.1:8004"
+[[backends]]
+name = "service-6"
+addr = "127.0.0.1:8005"
+[[backends]]
+name = "service-7"
+addr = "127.0.0.1:8006"
