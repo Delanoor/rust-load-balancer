@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  service_1:
+    build:
+      context: ./service_1
+    ports:
+      - "8000:8000"
+  service_2:
+    build:
+      context: ./service_2
+    ports:
+      - "8001:8000"
+  service_3:
+    build:
+      context: ./service_3
+    ports:
+      - "8002:8000"
+  service_4:
+    build:
+      context: ./service_4
+    ports:
+      - "8003:8000"
+  service_5:
+    build:
+      context: ./service_5
+    ports:
+      - "8004:8000"
+  service_6:
+    build:
+      context: ./service_6
+    ports:
+      - "8005:8000"
+  service_7:
+    build:
+      context: ./service_7
+    ports:
+      - "8006:8000"
