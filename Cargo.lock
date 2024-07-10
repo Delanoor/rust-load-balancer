@@ -27,6 +27,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "app"
+version = "0.1.0"
+dependencies = [
+ "arc-swap",
+ "base64 0.22.1",
+ "bytes",
+ "color-eyre",
+ "config",
+ "http",
+ "http-body",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "notify",
+ "rand",
+ "serde",
+ "sha1",
+ "thiserror",
+ "tokio",
+ "tower",
+ "tracing",
+ "tracing-error",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "arc-swap"
 version = "1.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1010,32 +1036,6 @@ checksum = "7e2a3bcec1f113553ef1c88aae6c020a369d03d55b58de9869a0908930385091"
 dependencies = [
  "cfg-if",
  "ordered-multimap",
-]
-
-[[package]]
-name = "rust-load-balancer"
-version = "0.1.0"
-dependencies = [
- "arc-swap",
- "base64 0.22.1",
- "bytes",
- "color-eyre",
- "config",
- "http",
- "http-body",
- "http-body-util",
- "hyper",
- "hyper-util",
- "notify",
- "rand",
- "serde",
- "sha1",
- "thiserror",
- "tokio",
- "tower",
- "tracing",
- "tracing-error",
- "tracing-subscriber",
 ]
 
 [[package]]
