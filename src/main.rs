@@ -1,19 +1,19 @@
-use std::sync::Arc;
-
-use rust_load_balancer::configuration::Settings;
-use rust_load_balancer::proxy::Server;
-use rust_load_balancer::utils::tracing::init_tracing;
+use app::configuration::Settings;
+use app::proxy::Server;
+use app::utils::tracing::init_tracing;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     color_eyre::install().expect("Failed to install color_eyre");
     init_tracing().expect("Failed to initialize tracing");
 
-    let configs = Settings::new().expect("Failed to load configuration.");
+    let configs = Settings::load().expect("Failed to load configuration.");
 
-    let lb = Server::new(configs);
+    let mut lb = Server::new(configs);
 
-    lb.run().await?;
+    if let Err(_) = lb.run().await {
+        tracing::error!("Failed to start lb")
+    }
 
     Ok(())
 }

@@ -1,18 +1,14 @@
 use rand::Rng;
 use std::net::SocketAddr;
-
+use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 use tokio::io::{copy_bidirectional, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
 use tracing::debug;
 
-use tokio::net::{TcpListener, TcpStream};
-
 pub mod backend;
-
+use crate::configuration::{LoadBalancingAlgorithm, Settings};
 use backend::Backend;
-
-use crate::configuration::LoadBalancingAlgorithm;
-use crate::configuration::Settings;
 
 #[derive(Debug)]
 pub struct Server {
@@ -20,23 +16,26 @@ pub struct Server {
     pub backends: Vec<Backend>,
     pub current_index: Mutex<usize>,
     pub selector: LoadBalancingAlgorithm,
+    rx: Receiver<Settings>,
 }
 
 impl Server {
-    pub fn new(config: Settings) -> Arc<Self> {
-        // let rcvr = config.clone().watch_config().unwrap();
+    pub fn new(config: Settings) -> Server {
+        let rcvr = config.clone().watch_config();
 
         let new_server = Self {
             listen_addr: config.listen_addr,
             backends: config.backends,
             current_index: Mutex::new(0),
             selector: config.algorithm,
+            rx: rcvr,
         };
-        Arc::new(new_server)
+        // Arc::new(new_server)
+        new_server
     }
+
     pub fn update(&mut self, settings: Settings) {
         self.backends = settings.backends;
-
         self.selector = settings.algorithm;
     }
 
@@ -45,11 +44,11 @@ impl Server {
             LoadBalancingAlgorithm::Random => {
                 let mut rng = rand::thread_rng();
                 let random_index = rng.gen_range(0..self.backends.len());
-                tracing::info!("New random number : {}", random_index);
+                tracing::info!("New random number: {}", random_index);
                 self.backends[random_index].listen_addr
             }
             LoadBalancingAlgorithm::RoundRobin => {
-                let mut index: std::sync::MutexGuard<usize> = self.current_index.lock().unwrap();
+                let mut index = self.current_index.lock().unwrap();
                 let addr = self.backends[*index].listen_addr;
                 *index = (*index + 1) % self.backends.len();
                 addr
@@ -57,17 +56,38 @@ impl Server {
         }
     }
 
-    pub async fn run(self: Arc<Self>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // wait on config changes to update backend server pool
+    pub async fn config_sync(&mut self) {
+        loop {
+            match self.rx.recv() {
+                Ok(new_config) => {
+                    tracing::info!("Config file watch event. New config: {:?}", new_config);
+
+                    self.update(new_config);
+                }
+                Err(e) => {
+                    tracing::error!("watch error: {:?}", e);
+                    break;
+                }
+            }
+        }
+    }
+
+    pub async fn run(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let listener = TcpListener::bind(&self.listen_addr).await?;
         tracing::info!("Listening on {}", self.listen_addr);
 
+        self.config_sync().await;
         loop {
             let (client_stream, _) = listener.accept().await?;
             let backend_addr = self.get_next().await;
             tracing::info!("Forwarding connection to {}", backend_addr);
 
-            let service: Arc<Server> = Arc::clone(&self);
-            tokio::task::spawn(handle_connection(client_stream, backend_addr, service));
+            tokio::spawn(async move {
+                if let Err(e) = handle_connection(client_stream, backend_addr).await {
+                    tracing::error!("Error running server: {:?}", e);
+                }
+            });
         }
     }
 }
@@ -75,8 +95,7 @@ impl Server {
 async fn handle_connection(
     mut client_stream: TcpStream,
     backend_addr: SocketAddr,
-    _load_balancer: Arc<Server>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(), Box<dyn std::error::Error>> {
     let mut backend_stream = TcpStream::connect(backend_addr).await?;
     match copy_bidirectional(&mut client_stream, &mut backend_stream).await {
         Ok((from_client, from_server)) => {
@@ -86,7 +105,7 @@ async fn handle_connection(
             );
         }
         Err(e) => {
-            eprintln!("Error in connection: {}", e);
+            tracing::error!("Error in connection: {}", e);
         }
     }
 
