@@ -2,8 +2,9 @@ use rand::Rng;
 use std::net::SocketAddr;
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
-use tokio::io::{copy_bidirectional, AsyncWriteExt};
+use tokio::io::copy_bidirectional;
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::RwLock;
 use tracing::debug;
 
 pub mod backend;
@@ -11,34 +12,20 @@ use crate::configuration::{LoadBalancingAlgorithm, Settings};
 use backend::Backend;
 
 #[derive(Debug)]
-pub struct Server {
+pub struct LoadBalancer {
     pub listen_addr: SocketAddr,
-    pub backends: Vec<Backend>,
-    pub current_index: Mutex<usize>,
-    pub selector: LoadBalancingAlgorithm,
+    pub proxies: Arc<RwLock<Proxy>>,
     rx: Receiver<Settings>,
 }
 
-impl Server {
-    pub fn new(config: Settings) -> Server {
-        let rcvr = config.clone().watch_config();
+#[derive(Debug)]
+pub struct Proxy {
+    pub backends: Vec<Arc<Backend>>,
+    pub selector: LoadBalancingAlgorithm,
+    pub current_index: Mutex<usize>,
+}
 
-        let new_server = Self {
-            listen_addr: config.listen_addr,
-            backends: config.backends,
-            current_index: Mutex::new(0),
-            selector: config.algorithm,
-            rx: rcvr,
-        };
-        // Arc::new(new_server)
-        new_server
-    }
-
-    pub fn update(&mut self, settings: Settings) {
-        self.backends = settings.backends;
-        self.selector = settings.algorithm;
-    }
-
+impl Proxy {
     pub async fn get_next(&self) -> SocketAddr {
         match self.selector {
             LoadBalancingAlgorithm::Random => {
@@ -55,6 +42,43 @@ impl Server {
             }
         }
     }
+}
+
+impl LoadBalancer {
+    pub fn new(config: Settings) -> LoadBalancer {
+        let rcvr = config.clone().watch_config();
+
+        let mut backend_servers = vec![];
+
+        for backend in config.backends.into_iter() {
+            backend_servers.push(Arc::new(backend))
+        }
+
+        let new_server = Self {
+            listen_addr: config.listen_addr,
+            proxies: Arc::new(RwLock::new(Proxy {
+                backends: backend_servers,
+                current_index: Mutex::new(0),
+                selector: config.algorithm,
+            })),
+
+            rx: rcvr,
+        };
+        // Arc::new(new_server)
+        new_server
+    }
+
+    pub async fn update(&mut self, settings: Settings) {
+        let mut backend_servers = vec![];
+
+        for backend in settings.backends.into_iter() {
+            backend_servers.push(Arc::new(backend))
+        }
+
+        let mut proxies = self.proxies.write().await;
+        proxies.backends = backend_servers;
+        proxies.selector = settings.algorithm;
+    }
 
     // wait on config changes to update backend server pool
     pub async fn config_sync(&mut self) {
@@ -63,7 +87,7 @@ impl Server {
                 Ok(new_config) => {
                     tracing::info!("Config file watch event. New config: {:?}", new_config);
 
-                    self.update(new_config);
+                    self.update(new_config).await;
                 }
                 Err(e) => {
                     tracing::error!("watch error: {:?}", e);
@@ -74,24 +98,44 @@ impl Server {
     }
 
     pub async fn run(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let listener = TcpListener::bind(&self.listen_addr).await?;
         tracing::info!("Listening on {}", self.listen_addr);
+        let listener: TcpListener = TcpListener::bind(self.listen_addr).await?;
 
+        let proxies = self.proxies.clone();
+
+        tokio::spawn(async move {
+            if let Err(e) = run_server(listener, proxies).await {
+                tracing::error!("Error running proxy server {:?}", e);
+                return;
+            }
+        });
         self.config_sync().await;
-        loop {
-            let (client_stream, _) = listener.accept().await?;
-            let backend_addr = self.get_next().await;
-            tracing::info!("Forwarding connection to {}", backend_addr);
 
-            tokio::spawn(async move {
-                if let Err(e) = handle_connection(client_stream, backend_addr).await {
-                    tracing::error!("Error running server: {:?}", e);
-                }
-            });
-        }
+        Ok(())
     }
 }
+async fn run_server(
+    lb_listener: TcpListener,
+    proxies: Arc<RwLock<Proxy>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    tracing::info!("LB listener: {:?}", lb_listener);
+    loop {
+        let (client_stream, _) = lb_listener.accept().await?;
+        let proxies_clone = proxies.clone();
 
+        tokio::spawn(async move {
+            let backend_addr = {
+                let proxies = proxies_clone.read().await;
+                proxies.get_next().await
+            };
+
+            tracing::info!("Forwarding connection to {}", backend_addr);
+            if let Err(e) = handle_connection(client_stream, backend_addr).await {
+                tracing::error!("Error running server: {:?}", e);
+            }
+        });
+    }
+}
 async fn handle_connection(
     mut client_stream: TcpStream,
     backend_addr: SocketAddr,
@@ -109,8 +153,7 @@ async fn handle_connection(
         }
     }
 
-    client_stream.shutdown().await?;
-    backend_stream.shutdown().await?;
-
+    // client_stream.shutdown().await?;
+    // backend_stream.shutdown().await?;
     Ok(())
 }

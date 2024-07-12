@@ -6,5 +6,5 @@ pub mod utils;
 
 pub mod prelude {
     pub use crate::configuration::Settings;
-    pub use crate::proxy::Server;
+    pub use crate::proxy::LoadBalancer;
 }

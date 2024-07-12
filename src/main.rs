@@ -1,5 +1,5 @@
 use app::configuration::Settings;
-use app::proxy::Server;
+use app::proxy::LoadBalancer;
 use app::utils::tracing::init_tracing;
 
 #[tokio::main]
@@ -9,7 +9,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let configs = Settings::load().expect("Failed to load configuration.");
 
-    let mut lb = Server::new(configs);
+    let mut lb = LoadBalancer::new(configs);
 
     if let Err(_) = lb.run().await {
         tracing::error!("Failed to start lb")
