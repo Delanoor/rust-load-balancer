@@ -5,7 +5,7 @@ use tracing_subscriber::prelude::*;
 use tracing_subscriber::{fmt, EnvFilter};
 
 pub fn init_tracing() -> Result<()> {
-    let fmt_layer = fmt::layer().compact();
+    let fmt_layer = fmt::layer().pretty().with_ansi(true);
 
     // Create a filter layer to control the verbosity of logs
     // Try to get the filter config from the environment variables

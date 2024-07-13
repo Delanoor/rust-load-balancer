@@ -128,3 +128,8 @@ EOF
 done
 
 docker-compose up --build
+
+# Clean up created service directories
+for i in $(seq 1 $NUM_SERVICES); do
+    rm -rf "service_$i"
+done

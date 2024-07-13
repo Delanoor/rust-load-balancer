@@ -22,6 +22,8 @@ pub enum LoadBalancingAlgorithm {
     RoundRobin,
     #[serde(rename = "random")]
     Random,
+    #[serde(rename = "least-connection")]
+    LeastConnection,
 }
 
 #[derive(Debug, Deserialize)]

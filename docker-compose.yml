@@ -36,3 +36,18 @@ services:
       context: ./service_7
     ports:
       - "8006:8000"
+  service_8:
+    build:
+      context: ./service_8
+    ports:
+      - "8007:8000"
+  service_9:
+    build:
+      context: ./service_9
+    ports:
+      - "8008:8000"
+  service_10:
+    build:
+      context: ./service_10
+    ports:
+      - "8009:8000"
