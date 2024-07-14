@@ -1,6 +1,8 @@
 use std::net::SocketAddr;
 
-#[derive(Debug, Clone)]
+use serde::Deserialize;
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct Backend {
     pub name: String,
     pub listen_addr: SocketAddr,

@@ -1,10 +1,11 @@
 use config::{Config, ConfigError, File};
-use notify::{recommended_watcher, RecommendedWatcher, RecursiveMode, Watcher};
+use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Deserialize;
 use std::path::Path;
 use std::sync::mpsc::{channel, Receiver};
-
+use std::thread;
 use std::{env, net::SocketAddr};
+use tracing::error;
 
 use crate::proxy::backend::Backend;
 
@@ -21,6 +22,8 @@ pub enum LoadBalancingAlgorithm {
     RoundRobin,
     #[serde(rename = "random")]
     Random,
+    #[serde(rename = "least-connection")]
+    LeastConnection,
 }
 
 #[derive(Debug, Deserialize)]
@@ -29,7 +32,7 @@ pub struct RawBackend {
     pub addr: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Settings {
     pub listen_addr: SocketAddr,
     pub backends: Vec<Backend>,
@@ -37,7 +40,7 @@ pub struct Settings {
 }
 
 impl Settings {
-    pub fn new() -> Result<Self, ConfigError> {
+    pub fn load() -> Result<Self, ConfigError> {
         let run_mode = env::var("RUN_MODE").unwrap_or_else(|_| "development".into());
         let builder = Config::builder()
             .add_source(File::with_name(&format!("{}", run_mode)).required(false))
@@ -65,28 +68,46 @@ impl Settings {
         })
     }
 
-    pub fn watch_config(self) -> Result<Receiver<Settings>, ConfigError> {
-        let (tx, rx) = channel();
-        let config_tx = tx.clone();
+    pub fn watch_config(self) -> Receiver<Settings> {
+        let (config_tx, config_rx) = channel();
 
-        let mut watcher: RecommendedWatcher = recommended_watcher(move |res| match res {
-            Ok(event) => match Settings::new() {
-                Ok(new_settings) => {
-                    if let Err(e) = config_tx.send(new_settings) {
-                        println!("Error sending new config: {:?}", e);
+        thread::spawn(move || {
+            let (tx, rx) = channel();
+            let mut watcher = match RecommendedWatcher::new(tx, notify::Config::default()) {
+                Ok(w) => w,
+                Err(e) => {
+                    error!("Error creating watcher: {:?}", e);
+                    return;
+                }
+            };
+
+            if let Err(e) =
+                watcher.watch(Path::new("development.toml"), RecursiveMode::NonRecursive)
+            {
+                error!("Error watching file: {:?}", e);
+                return;
+            }
+
+            loop {
+                match rx.recv() {
+                    Ok(_) => match Settings::load() {
+                        Ok(new_settings) => {
+                            if let Err(e) = config_tx.send(new_settings) {
+                                error!("Error sending reloaded config: {:?}", e);
+                            }
+                        }
+                        Err(e) => {
+                            error!("Error reloading config: {:?}", e);
+                        }
+                    },
+                    Err(e) => {
+                        error!("Error receiving file change event: {:?}", e);
+                        break;
                     }
                 }
-                Err(e) => println!("Error reloading config: {:?}", e),
-            },
-            Err(e) => println!("Watch error: {:?}", e),
-            _ => {}
-        })
-        .unwrap();
+            }
+        });
 
-        watcher
-            .watch(Path::new("config.toml"), RecursiveMode::NonRecursive)
-            .unwrap();
-
-        Ok(rx)
+        config_rx
     }
 }
