@@ -61,10 +61,25 @@ impl Proxy {
         addr
     }
 
-    pub async fn update_connection_count(&self, addr: SocketAddr, delta: usize) {
+    // pub async fn increment_connection_count(&self, addr: SocketAddr) {
+    //     let mut counts = self.connection_counts.write().await;
+    //     let count = counts.entry(addr).or_insert(0);
+    //     *count += 1;
+    // }
+
+    // pub async fn decrement_connection_count(&self, addr: SocketAddr) {
+    //     let mut counts = self.connection_counts.write().await;
+    //     if let Some(count) = counts.get_mut(&addr) {
+    //         if *count > 0 {
+    //             *count -= 1;
+    //         }
+    //     }
+    // }
+
+    pub async fn update_connection_count(&self, addr: SocketAddr, delta: isize) {
         let mut counts = self.connection_counts.write().await;
         let count = counts.entry(addr).or_insert(0);
-        *count = (*count + delta) as usize
+        *count = (*count as isize + delta) as usize
     }
 }
 
@@ -145,7 +160,6 @@ async fn run_server(
     lb_listener: TcpListener,
     proxies: Arc<RwLock<Proxy>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    info!("LB listener: {:?}", lb_listener);
     loop {
         let (client_stream, _) = lb_listener.accept().await?;
         let proxies_clone = proxies.clone();
@@ -168,11 +182,11 @@ async fn run_server(
                 error!("Error running server: {:?}", e);
             }
 
-            // proxies_clone
-            //     .read()
-            //     .await
-            //     .update_connection_count(backend_addr, -1)
-            //     .await;
+            proxies_clone
+                .read()
+                .await
+                .update_connection_count(backend_addr, -1)
+                .await;
         });
     }
 }
