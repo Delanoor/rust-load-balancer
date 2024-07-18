@@ -2,6 +2,8 @@ listen_addr = "127.0.0.1:3000"
 # algorithm = "round-robin"
 # algorithm = "random"
 algorithm = "least-connection"
+monitoring_interval = 10
+health_check_interval = 5
 
 [[backends]]
 name = "service-1"
@@ -18,18 +20,3 @@ addr = "127.0.0.1:8003"
 [[backends]]
 name = "service-5"
 addr = "127.0.0.1:8004"
-[[backends]]
-name = "service-6"
-addr = "127.0.0.1:8005"
-[[backends]]
-name = "service-7"
-addr = "127.0.0.1:8006"
-[[backends]]
-name = "service-8"
-addr = "127.0.0.1:8007"
-[[backends]]
-name = "service-9"
-addr = "127.0.0.1:8008"
-[[backends]]
-name = "service-10"
-addr = "127.0.0.1:8009"

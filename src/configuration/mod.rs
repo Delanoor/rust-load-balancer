@@ -14,6 +14,8 @@ pub struct RawSettings {
     pub listen_addr: String,
     pub backends: Vec<RawBackend>,
     pub algorithm: LoadBalancingAlgorithm,
+    pub monitoring_interval: u64,
+    pub health_check_interval: u64,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -37,6 +39,8 @@ pub struct Settings {
     pub listen_addr: SocketAddr,
     pub backends: Vec<Backend>,
     pub algorithm: LoadBalancingAlgorithm,
+    pub monitoring_interval: u64,
+    pub health_check_interval: u64,
 }
 
 impl Settings {
@@ -60,11 +64,15 @@ impl Settings {
             .collect();
 
         let algorithm = raw.algorithm;
+        let monitoring_interval = raw.monitoring_interval;
+        let health_check_interval = raw.health_check_interval;
 
         Ok(Self {
             listen_addr,
             backends,
             algorithm,
+            monitoring_interval,
+            health_check_interval,
         })
     }
 
