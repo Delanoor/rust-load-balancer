@@ -11,7 +11,7 @@ use tracing::{error, info};
 
 use crate::proxy::proxy::Proxy;
 
-use crate::configuration::Settings;
+use crate::configuration::{LoadBalancingAlgorithm, Settings};
 
 #[derive(Debug)]
 pub struct LoadBalancer {
@@ -40,6 +40,7 @@ impl LoadBalancer {
                 current_index: Mutex::new(0),
                 selector: config.algorithm,
                 connection_counts: Arc::new(RwLock::new(connection_counts)),
+                healthy_backends: RwLock::new(Vec::new()),
             })),
             rx: rcvr,
             monitoring_interval: Duration::from_secs(config.monitoring_interval),
@@ -47,6 +48,24 @@ impl LoadBalancer {
         };
 
         new_server
+    }
+
+    pub async fn run(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        info!("Listening on {}", self.listen_addr);
+        let listener: TcpListener = TcpListener::bind(self.listen_addr).await?;
+
+        let proxies = self.proxies.clone();
+
+        tokio::spawn(async move {
+            if let Err(e) = run_server(listener, proxies).await {
+                error!("Error running proxy server {:?}", e);
+                return;
+            }
+        });
+
+        self.config_sync().await?;
+
+        Ok(())
     }
 
     #[tracing::instrument(name = "Run monitoring", skip_all, err(Debug))]
@@ -60,6 +79,7 @@ impl LoadBalancer {
 
             let elapsed_time = start_time.elapsed();
 
+            // check if time left
             if elapsed_time < self.monitoring_interval {
                 sleep(self.monitoring_interval - elapsed_time).await;
             }
@@ -74,7 +94,43 @@ impl LoadBalancer {
         &self,
         response_times: Vec<Duration>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        todo!()
+        let average_response_time: Duration =
+            response_times.iter().sum::<Duration>() / response_times.len() as u32;
+        if average_response_time > Duration::from_millis(150) {
+            self.update_algorithm(LoadBalancingAlgorithm::LeastConnection)
+                .await?;
+        } else {
+            self.update_algorithm(LoadBalancingAlgorithm::RoundRobin)
+                .await?;
+        }
+
+        Ok(())
+    }
+
+    async fn update_algorithm(
+        &self,
+        new_algorithm: LoadBalancingAlgorithm,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut proxies = self.proxies.write().await;
+
+        proxies.selector = new_algorithm;
+
+        Ok(())
+    }
+
+    async fn run_health_checks(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let start_time = Instant::now();
+
+        {
+            let proxies = self.proxies.read().await;
+            proxies.update_healthy_backends().await;
+        }
+        let elapsed_time = start_time.elapsed();
+        if elapsed_time < self.health_check_interval {
+            sleep(self.health_check_interval - elapsed_time).await;
+        }
+
+        Ok(())
     }
 
     #[tracing::instrument(name = "Update configuration", skip_all, err(Debug))]
@@ -103,8 +159,12 @@ impl LoadBalancer {
                     info!("New load balancing algorithm: {:?}", new_config.algorithm);
                     info!("Backend servers {:?}", new_config.backends);
                     info!(
-                        "Health check interva; {:?}",
+                        "Health check interval: {:?}",
                         new_config.health_check_interval
+                    );
+                    info!(
+                        "Monitoring check interval: {:?}",
+                        new_config.monitoring_interval
                     );
                     self.update(new_config).await?;
                 }
@@ -115,25 +175,22 @@ impl LoadBalancer {
         }
     }
 
-    pub async fn run(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        info!("Listening on {}", self.listen_addr);
-        let listener: TcpListener = TcpListener::bind(self.listen_addr).await?;
+    #[tracing::instrument(name = "Run monitoring and health checks", skip_all, err(Debug))]
+    async fn monitor_and_health_check(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let mut monitoring_interval = tokio::time::interval(self.monitoring_interval);
+        let mut health_check_interval = tokio::time::interval(self.health_check_interval);
 
-        let proxies = self.proxies.clone();
+        loop {
+            tokio::select! {
+                _ = health_check_interval.tick() =>{
+                    self.run_health_checks().await?;
+                }
 
-        // tokio::spawn(async move {
-        //     if let Err(e) = self.
-        // });
-
-        tokio::spawn(async move {
-            if let Err(e) = run_server(listener, proxies).await {
-                error!("Error running proxy server {:?}", e);
-                return;
+                _ = monitoring_interval.tick() => {
+                    self.run_monitoring().await?;
+                }
             }
-        });
-        self.config_sync().await?;
-
-        Ok(())
+        }
     }
 }
 

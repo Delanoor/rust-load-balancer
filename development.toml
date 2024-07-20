@@ -1,10 +1,9 @@
 listen_addr = "127.0.0.1:3000"
-# algorithm = "round-robin"
+algorithm = "round-robin"
 # algorithm = "random"
-algorithm = "least-connection"
+# algorithm = "least-connection"
 monitoring_interval = 10
 health_check_interval = 5
-
 [[backends]]
 name = "service-1"
 addr = "127.0.0.1:8000"
