@@ -22,7 +22,8 @@ pub struct Proxy {
 
 impl Proxy {
     pub async fn get_next(&self) -> SocketAddr {
-        let healthy_backends = self.healthy_backends.read().await;
+        // let healthy_backends = self.healthy_backends.read().await;
+        let healthy_backends = self.backends.clone();
         if healthy_backends.is_empty() {
             tracing::error!("No healthy backends available")
         }

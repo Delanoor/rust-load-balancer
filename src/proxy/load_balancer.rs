@@ -1,10 +1,11 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::mpsc::Receiver;
+
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::io::copy_bidirectional;
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 use tokio::time::sleep;
 use tracing::{error, info};
@@ -17,7 +18,7 @@ use crate::configuration::{LoadBalancingAlgorithm, Settings};
 pub struct LoadBalancer {
     pub listen_addr: SocketAddr,
     pub proxies: Arc<RwLock<Proxy>>,
-    rx: Receiver<Settings>,
+    rx: mpsc::Receiver<Settings>,
     monitoring_interval: Duration,
     health_check_interval: Duration,
 }
@@ -87,7 +88,24 @@ impl LoadBalancer {
     }
 
     async fn collect_metrics(&self) -> Result<Vec<Duration>, Box<dyn std::error::Error>> {
-        todo!()
+        let proxies = self.proxies.read().await;
+        let mut response_times = Vec::new();
+
+        for backend in &proxies.backends {
+            let start = Instant::now();
+            let result = backend.health_check().await;
+            let duration = start.elapsed();
+
+            if result {
+                response_times.push(duration);
+            } else {
+                //  push a large duration to indicate a failure.
+                //  TODO
+                response_times.push(Duration::from_secs(9999));
+            }
+        }
+
+        Ok(response_times)
     }
 
     async fn check_conditions_and_update(
@@ -153,26 +171,21 @@ impl LoadBalancer {
 
     #[tracing::instrument(name = "Sync configuration", skip_all, err(Debug))]
     pub async fn config_sync(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        loop {
-            match self.rx.recv() {
-                Ok(new_config) => {
-                    info!("New load balancing algorithm: {:?}", new_config.algorithm);
-                    info!("Backend servers {:?}", new_config.backends);
-                    info!(
-                        "Health check interval: {:?}",
-                        new_config.health_check_interval
-                    );
-                    info!(
-                        "Monitoring check interval: {:?}",
-                        new_config.monitoring_interval
-                    );
-                    self.update(new_config).await?;
-                }
-                Err(e) => {
-                    error!("watch error: {:?}", e);
-                }
-            }
+        while let Some(new_config) = self.rx.recv().await {
+            info!("New load balancing algorithm: {:?}", new_config.algorithm);
+            info!("Backend servers {:?}", new_config.backends);
+            info!(
+                "Health check interval: {:?}",
+                new_config.health_check_interval
+            );
+            info!(
+                "Monitoring check interval: {:?}",
+                new_config.monitoring_interval
+            );
+            self.update(new_config).await?;
         }
+
+        Ok(())
     }
 
     #[tracing::instrument(name = "Run monitoring and health checks", skip_all, err(Debug))]

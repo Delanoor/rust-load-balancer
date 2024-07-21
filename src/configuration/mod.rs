@@ -1,10 +1,10 @@
+use anyhow::Result;
 use config::{Config, ConfigError, File};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Deserialize;
 use std::path::Path;
-use std::sync::mpsc::{channel, Receiver};
-use std::thread;
 use std::{env, net::SocketAddr};
+use tokio::sync::mpsc;
 use tracing::error;
 
 use crate::proxy::backend::Backend;
@@ -34,13 +34,14 @@ pub struct RawBackend {
     pub addr: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct Settings {
     pub listen_addr: SocketAddr,
     pub backends: Vec<Backend>,
     pub algorithm: LoadBalancingAlgorithm,
     pub monitoring_interval: u64,
     pub health_check_interval: u64,
+    pub config_tx: Option<mpsc::Sender<Settings>>,
 }
 
 impl Settings {
@@ -73,14 +74,15 @@ impl Settings {
             algorithm,
             monitoring_interval,
             health_check_interval,
+            config_tx: None,
         })
     }
 
-    pub fn watch_config(self) -> Receiver<Settings> {
-        let (config_tx, config_rx) = channel();
+    pub fn watch_config(self) -> mpsc::Receiver<Settings> {
+        let (config_tx, config_rx) = mpsc::channel(100);
 
-        thread::spawn(move || {
-            let (tx, rx) = channel();
+        tokio::spawn(async move {
+            let (tx, rx) = std::sync::mpsc::channel();
             let mut watcher = match RecommendedWatcher::new(tx, notify::Config::default()) {
                 Ok(w) => w,
                 Err(e) => {
@@ -100,7 +102,7 @@ impl Settings {
                 match rx.recv() {
                     Ok(_) => match Settings::load() {
                         Ok(new_settings) => {
-                            if let Err(e) = config_tx.send(new_settings) {
+                            if let Err(e) = config_tx.send(new_settings).await {
                                 error!("Error sending reloaded config: {:?}", e);
                             }
                         }

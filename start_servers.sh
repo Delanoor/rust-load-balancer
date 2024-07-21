@@ -109,7 +109,7 @@ http {
             index index.html;
 
             # Enable keep-alive connections
-            keepalive_timeout 65;
+            keepalive_timeout 0;
         }
 
         location /nginx_status {
@@ -162,7 +162,7 @@ EOF
 done
 
 # Build and start the containers
-docker-compose up --build
+docker compose up --build
 
 # Clean up created service directories
 for i in $(seq 1 $NUM_SERVICES); do
