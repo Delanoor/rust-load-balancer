@@ -1,6 +1,6 @@
 listen_addr = "127.0.0.1:3000"
-algorithm = "round-robin"
-# algorithm = "random"
+# algorithm = "round-robin"
+algorithm = "random"
 # algorithm = "least-connection"
 monitoring_interval = 10
 health_check_interval = 5

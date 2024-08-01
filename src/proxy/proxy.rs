@@ -4,6 +4,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use color_eyre::eyre::Result;
 use rand::Rng;
 use tokio::sync::RwLock;
 
@@ -66,8 +67,10 @@ impl Proxy {
         *count = (*count as isize + delta) as usize
     }
 
-    pub async fn update_healthy_backends(&self) {
+    #[tracing::instrument(name = "Update healthy backends", skip_all, err(Debug))]
+    pub async fn update_healthy_backends(&self) -> Result<()> {
         let mut healthy_backends = self.healthy_backends.write().await;
+        tracing::info!("Healthy connections: {:?}", healthy_backends);
         healthy_backends.clear();
 
         for backend in &self.backends {
@@ -75,5 +78,7 @@ impl Proxy {
                 healthy_backends.push(Arc::clone(backend))
             }
         }
+
+        Ok(())
     }
 }

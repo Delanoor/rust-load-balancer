@@ -64,6 +64,24 @@ impl LoadBalancer {
             }
         });
 
+        // Spawn the health check task
+        let health_check_proxies = self.proxies.clone();
+        let health_check_interval = self.health_check_interval;
+
+        tokio::spawn(async move {
+            loop {
+                let start_time = Instant::now();
+                {
+                    let proxies = health_check_proxies.read().await;
+                    proxies.update_healthy_backends().await;
+                }
+                let elapsed_time = start_time.elapsed();
+                if elapsed_time < health_check_interval {
+                    sleep(health_check_interval - elapsed_time).await;
+                }
+            }
+        });
+
         self.config_sync().await?;
 
         Ok(())
