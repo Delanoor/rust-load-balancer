@@ -21,21 +21,10 @@ rm -rf service_*
 rm -f $DOCKER_COMPOSE_FILE
 rm -f $TOML_FILE
 
-# Create Dockerfiles and directories for services
+# Create directories and files for services
 for i in $(seq 1 $NUM_SERVICES); do
     SERVICE_DIR="service_$i"
     mkdir -p $SERVICE_DIR
-    cat <<EOF >$SERVICE_DIR/Dockerfile
-FROM python:3.8-slim
-
-WORKDIR /app
-
-COPY index.html .
-
-CMD ["python3", "-m", "http.server", "8000"]
-EOF
-
-
     cat <<EOF >$SERVICE_DIR/index.html
 <!DOCTYPE html>
 <html lang="en">
@@ -90,6 +79,49 @@ h3 {
 </html>
 EOF
 
+    # Create a Dockerfile for each service using Nginx
+    cat <<EOF >$SERVICE_DIR/Dockerfile
+FROM nginx:alpine
+
+COPY index.html /usr/share/nginx/html/index.html
+COPY nginx.conf /etc/nginx/nginx.conf
+EOF
+
+    # Create an Nginx configuration file for HTTP/1.1
+    cat <<EOF >$SERVICE_DIR/nginx.conf
+events {}
+
+
+http {
+    log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                      '$status $body_bytes_sent "$http_referer" '
+                      '"$http_user_agent" "$http_x_forwarded_for" '
+                      'rt=$request_time';
+
+    access_log /var/log/nginx/access.log main;
+
+    server {
+        listen 8000 http2;
+        server_name localhost;
+
+        location / {
+            root /usr/share/nginx/html;
+            index index.html;
+
+            # Enable keep-alive connections
+            keepalive_timeout 0;
+        }
+
+        location /nginx_status {
+            stub_status on;
+            access_log off;
+            allow 127.0.0.1;
+            deny all;
+        }
+    }
+}
+EOF
+
 done
 
 # Create docker-compose.yml
@@ -115,7 +147,9 @@ cat <<EOF >$TOML_FILE
 listen_addr = "127.0.0.1:3000"
 algorithm = "round-robin"
 # algorithm = "random"
-
+# algorithm = "least-connection"
+monitoring_interval = 10
+health_check_interval = 5
 EOF
 
 # Add backends to development.toml
@@ -127,7 +161,8 @@ addr = "127.0.0.1:$((8000 + i - 1))"
 EOF
 done
 
-docker-compose up --build
+# Build and start the containers
+docker compose up --build
 
 # Clean up created service directories
 for i in $(seq 1 $NUM_SERVICES); do

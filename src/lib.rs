@@ -1,10 +1,9 @@
-pub mod common;
 pub mod configuration;
 pub mod proxy;
-pub mod selection_method;
+
 pub mod utils;
 
 pub mod prelude {
     pub use crate::configuration::Settings;
-    pub use crate::proxy::LoadBalancer;
+    pub use crate::proxy::load_balancer::LoadBalancer;
 }

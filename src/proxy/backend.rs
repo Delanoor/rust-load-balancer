@@ -1,6 +1,7 @@
-use std::net::SocketAddr;
+use std::{net::SocketAddr, time::Duration};
 
 use serde::Deserialize;
+use tokio::{net::TcpStream, time::timeout};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Backend {
@@ -12,12 +13,11 @@ impl Backend {
     pub fn new(name: String, listen_addr: SocketAddr) -> Backend {
         Backend { name, listen_addr }
     }
-}
 
-// fn tcp_health_check(server: SocketAddr) -> bool {
-//     if let Ok(_) = TcpStream::connect_timeout(&server, time::Duration::from_secs(3)) {
-//         true
-//     } else {
-//         false
-//     }
-// }
+    pub async fn health_check(&self) -> bool {
+        match timeout(Duration::from_secs(2), TcpStream::connect(self.listen_addr)).await {
+            Ok(Ok(_)) => true, // Connection succeeded
+            _ => false,
+        }
+    }
+}

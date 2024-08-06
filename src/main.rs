@@ -1,5 +1,5 @@
 use app::configuration::Settings;
-use app::proxy::LoadBalancer;
+use app::proxy::load_balancer::LoadBalancer;
 use app::utils::tracing::init_tracing;
 
 #[tokio::main]
